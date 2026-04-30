@@ -18,23 +18,30 @@ def load_live_data():
 @st.cache_data
 def load_season_data(selected_year):
     conn = sqlite3.connect('sports_analytics.db')
-    where_clause = "" if selected_year == "All-Time" else f"WHERE CAST(season AS TEXT) LIKE '%{selected_year}%'"
+    
+    # THE FIX: We use exact dates instead of the messy season column!
+    if selected_year == "All-Time":
+        where_match = ""
+        where_ball = ""
+    else:
+        where_match = f"WHERE match_date LIKE '%{selected_year}%'"
+        where_ball = f"WHERE date LIKE '%{selected_year}%'"
     
     df_matches = pd.DataFrame()
     try:
-        df_matches = pd.read_sql_query(f"SELECT match_date, team1, team2, winner, player_of_match, venue, toss_winner, toss_decision FROM match_summary {where_clause} ORDER BY match_date ASC", conn)
+        df_matches = pd.read_sql_query(f"SELECT match_date, team1, team2, winner, player_of_match, venue, toss_winner, toss_decision FROM match_summary {where_match} ORDER BY match_date ASC", conn)
     except:
         pass
         
     df_batters = pd.DataFrame()
     try:
-        df_batters = pd.read_sql_query(f"SELECT batter, SUM(runs_batter) as runs FROM ipl_history {where_clause} GROUP BY batter ORDER BY runs DESC LIMIT 5", conn)
+        df_batters = pd.read_sql_query(f"SELECT batter, SUM(runs_batter) as runs FROM ipl_history {where_ball} GROUP BY batter ORDER BY runs DESC LIMIT 5", conn)
     except:
         pass
 
     df_bowlers = pd.DataFrame()
     try:
-        df_bowlers = pd.read_sql_query(f"SELECT bowler, COUNT(player_out) as wickets FROM ipl_history {where_clause} {'AND' if where_clause else 'WHERE'} player_out IS NOT NULL GROUP BY bowler ORDER BY wickets DESC LIMIT 5", conn)
+        df_bowlers = pd.read_sql_query(f"SELECT bowler, COUNT(player_out) as wickets FROM ipl_history {where_ball} {'AND' if where_ball else 'WHERE'} player_out IS NOT NULL GROUP BY bowler ORDER BY wickets DESC LIMIT 5", conn)
     except:
         pass
         
@@ -112,7 +119,7 @@ with tab2:
     if not df_matches.empty:
         st.dataframe(df_matches, use_container_width=True, hide_index=True)
     else:
-        st.error("⚠️ Match Summary Data is missing! If this works locally but not online, your database file failed to sync to GitHub.")
+        st.error("⚠️ Match Summary Data is missing for this specific year.")
 
     st.markdown("---")
 
