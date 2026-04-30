@@ -5,6 +5,7 @@ import pandas as pd
 st.set_page_config(page_title="AdiSports Analytics", page_icon="🏏", layout="wide")
 st.title("🏏 AdiSports Analytics Hub")
 
+# --- DATA LOADERS ---
 @st.cache_data
 def load_live_data():
     conn = sqlite3.connect('sports_analytics.db')
@@ -16,30 +17,23 @@ def load_live_data():
     return df
 
 @st.cache_data
-def get_points_table(selected_year):
-    conn = sqlite3.connect('sports_analytics.db')
-    try:
-        if selected_year == "All-Time":
-            df = pd.read_sql_query("SELECT team1, team2, winner FROM match_summary", conn)
-        else:
-            df = pd.read_sql_query(f"SELECT team1, team2, winner FROM match_summary WHERE match_date LIKE '%{selected_year}%'", conn)
-    except:
-        conn.close()
-        return pd.DataFrame()
-    conn.close()
-
-    if df.empty:
+def get_points_table(df_matches):
+    if df_matches.empty:
         return pd.DataFrame()
 
-    teams = pd.concat([df['team1'], df['team2']]).dropna().unique()
+    teams = pd.concat([df_matches['team1'], df_matches['team2']]).dropna().unique()
     pt_dict = {team: {'M': 0, 'W': 0, 'L': 0, 'NR/Tie': 0, 'Pts': 0} for team in teams}
 
-    for _, row in df.iterrows():
-        t1, t2, w = row['team1'], row['team2'], row['winner']
+    for _, row in df_matches.iterrows():
+        t1, t2 = row['team1'], row['team2']
+        w = row.get('winner', None)
+        
         if pd.isna(t1) or pd.isna(t2):
             continue
+            
         pt_dict[t1]['M'] += 1
         pt_dict[t2]['M'] += 1
+        
         if pd.isna(w) or w not in [t1, t2]:
             pt_dict[t1]['NR/Tie'] += 1
             pt_dict[t2]['NR/Tie'] += 1
@@ -61,36 +55,56 @@ def get_points_table(selected_year):
 @st.cache_data
 def load_season_dashboard(selected_year):
     conn = sqlite3.connect('sports_analytics.db')
+    
+    # 1. Fetch MACRO Data (Match Summaries) dynamically
+    try:
+        df_matches = pd.read_sql_query("SELECT * FROM match_summary", conn)
+    except Exception as e:
+        st.error("⚠️ Database Error: 'match_summary' table is missing from your vault! (Did you run load_matches.py?)")
+        df_matches = pd.DataFrame()
+
+    # Filter matches by year using Pandas (safer than SQL string matching)
+    if not df_matches.empty and selected_year != "All-Time":
+        # Automatically detect what Kaggle named the date column
+        date_col = 'match_date' if 'match_date' in df_matches.columns else 'date'
+        
+        if 'Season' in df_matches.columns:
+            df_matches = df_matches[df_matches['Season'].astype(str).str.contains(selected_year)]
+        elif date_col in df_matches.columns:
+            df_matches = df_matches[df_matches[date_col].astype(str).str.contains(selected_year)]
+
+    total_matches = len(df_matches)
+
+    # 2. Fetch MVP Data
+    df_mom = pd.DataFrame()
+    if not df_matches.empty and 'player_of_match' in df_matches.columns:
+        df_mom = df_matches['player_of_match'].value_counts().reset_index()
+        df_mom.columns = ['player_of_match', 'awards']
+
+    # 3. Fetch MICRO Data (Batters & Bowlers)
     where_ball = "" if selected_year == "All-Time" else f"WHERE date LIKE '%{selected_year}%'"
-    where_match = "" if selected_year == "All-Time" else f"WHERE match_date LIKE '%{selected_year}%'"
-
+    
     try:
-        q_matches = f"SELECT COUNT(*) as total FROM match_summary {where_match}"
-        total_matches = pd.read_sql_query(q_matches, conn)['total'][0]
-    except:
-        total_matches = 0
-
-    try:
-        q_batters = f"SELECT batter, SUM(runs_batter) as runs FROM ipl_history {where_ball} GROUP BY batter ORDER BY runs DESC LIMIT 5"
-        df_batters = pd.read_sql_query(q_batters, conn)
+        df_batters = pd.read_sql_query(f"SELECT batter, SUM(runs_batter) as runs FROM ipl_history {where_ball} GROUP BY batter ORDER BY runs DESC LIMIT 5", conn)
     except:
         df_batters = pd.DataFrame()
 
     try:
-        q_bowlers = f"SELECT bowler, COUNT(*) as wickets FROM ipl_history {where_ball} WHERE is_wicket = 1 OR player_dismissed IS NOT NULL GROUP BY bowler ORDER BY wickets DESC LIMIT 5"
+        # Bulletproof Wicket Query (handles all Kaggle naming conventions)
+        q_bowlers = f"""
+            SELECT bowler, COUNT(*) as wickets 
+            FROM ipl_history {where_ball} 
+            WHERE player_dismissed IS NOT NULL AND player_dismissed != '' AND player_dismissed != 'NA'
+            GROUP BY bowler ORDER BY wickets DESC LIMIT 5
+        """
         df_bowlers = pd.read_sql_query(q_bowlers, conn)
     except:
         df_bowlers = pd.DataFrame()
 
-    try:
-        q_mom = f"SELECT player_of_match, COUNT(*) as awards FROM match_summary {where_match} GROUP BY player_of_match ORDER BY awards DESC LIMIT 5"
-        df_mom = pd.read_sql_query(q_mom, conn)
-    except:
-        df_mom = pd.DataFrame()
-
     conn.close()
-    return total_matches, df_batters, df_bowlers, df_mom
+    return total_matches, df_batters, df_bowlers, df_mom, df_matches
 
+# --- APP UI ---
 df_live = load_live_data()
 
 st.sidebar.header("🔍 Filter Live Matches")
@@ -126,7 +140,7 @@ with tab2:
     selected_year = st.selectbox("Select IPL Season:", years)
     st.markdown("---")
 
-    total_matches, df_batters, df_bowlers, df_mom = load_season_dashboard(selected_year)
+    total_matches, df_batters, df_bowlers, df_mom, df_matches_raw = load_season_dashboard(selected_year)
 
     c1, c2, c3, c4 = st.columns(4)
     c1.metric("🏏 Matches", total_matches)
@@ -140,7 +154,7 @@ with tab2:
 
     with col_pt:
         st.subheader(f"📊 {selected_year} Points Table")
-        pt_df = get_points_table(selected_year)
+        pt_df = get_points_table(df_matches_raw)
         if not pt_df.empty:
             st.dataframe(pt_df, use_container_width=True)
         else:
