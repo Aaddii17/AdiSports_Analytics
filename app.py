@@ -16,81 +16,50 @@ def load_live_data():
     return df
 
 @st.cache_data
-def get_points_table(selected_year):
+def load_season_data(selected_year):
     conn = sqlite3.connect('sports_analytics.db')
-    try:
-        if selected_year == "All-Time":
-            df = pd.read_sql_query("SELECT team1, team2, winner FROM match_summary", conn)
-        else:
-            df = pd.read_sql_query(f"SELECT team1, team2, winner FROM match_summary WHERE CAST(season AS TEXT) = '{selected_year}'", conn)
-    except:
-        conn.close()
-        return pd.DataFrame()
-    conn.close()
-
-    if df.empty:
-        return pd.DataFrame()
-
-    teams = pd.concat([df['team1'], df['team2']]).dropna().unique()
-    pt_dict = {team: {'M': 0, 'W': 0, 'L': 0, 'NR/Tie': 0, 'Pts': 0} for team in teams}
-
-    for _, row in df.iterrows():
-        t1, t2, w = row['team1'], row['team2'], row['winner']
-        if pd.isna(t1) or pd.isna(t2):
-            continue
-        pt_dict[t1]['M'] += 1
-        pt_dict[t2]['M'] += 1
-        
-        if pd.isna(w) or w not in [t1, t2]:
-            pt_dict[t1]['NR/Tie'] += 1
-            pt_dict[t2]['NR/Tie'] += 1
-            pt_dict[t1]['Pts'] += 1
-            pt_dict[t2]['Pts'] += 1
-        else:
-            loser = t2 if w == t1 else t1
-            pt_dict[w]['W'] += 1
-            pt_dict[w]['Pts'] += 2
-            if loser in pt_dict:
-                pt_dict[loser]['L'] += 1
-
-    pt_df = pd.DataFrame.from_dict(pt_dict, orient='index').reset_index()
-    pt_df.rename(columns={'index': 'Team'}, inplace=True)
-    pt_df = pt_df.sort_values(by=['Pts', 'W'], ascending=[False, False]).reset_index(drop=True)
-    pt_df.index += 1
-    return pt_df
-
-@st.cache_data
-def load_season_dashboard(selected_year):
-    conn = sqlite3.connect('sports_analytics.db')
+    where_clause = "" if selected_year == "All-Time" else f"WHERE CAST(season AS TEXT) LIKE '%{selected_year}%'"
     
-    where_clause = "" if selected_year == "All-Time" else f"WHERE CAST(season AS TEXT) = '{selected_year}'"
-
+    df_matches = pd.DataFrame()
     try:
-        total_matches = pd.read_sql_query(f"SELECT COUNT(*) as total FROM match_summary {where_clause}", conn)['total'][0]
+        df_matches = pd.read_sql_query(f"SELECT match_date, team1, team2, winner, player_of_match, venue, toss_winner, toss_decision FROM match_summary {where_clause} ORDER BY match_date ASC", conn)
     except:
-        total_matches = 0
-
+        pass
+        
+    df_batters = pd.DataFrame()
     try:
         df_batters = pd.read_sql_query(f"SELECT batter, SUM(runs_batter) as runs FROM ipl_history {where_clause} GROUP BY batter ORDER BY runs DESC LIMIT 5", conn)
     except:
-        df_batters = pd.DataFrame()
+        pass
 
+    df_bowlers = pd.DataFrame()
     try:
-        query_bowlers = f"SELECT bowler, COUNT(player_out) as wickets FROM ipl_history {where_clause} AND player_out IS NOT NULL GROUP BY bowler ORDER BY wickets DESC LIMIT 5" if selected_year == "All-Time" else f"SELECT bowler, COUNT(player_out) as wickets FROM ipl_history {where_clause} AND player_out IS NOT NULL GROUP BY bowler ORDER BY wickets DESC LIMIT 5"
-        if selected_year != "All-Time":
-            query_bowlers = f"SELECT bowler, COUNT(player_out) as wickets FROM ipl_history {where_clause} AND player_out IS NOT NULL GROUP BY bowler ORDER BY wickets DESC LIMIT 5"
-        
         df_bowlers = pd.read_sql_query(f"SELECT bowler, COUNT(player_out) as wickets FROM ipl_history {where_clause} {'AND' if where_clause else 'WHERE'} player_out IS NOT NULL GROUP BY bowler ORDER BY wickets DESC LIMIT 5", conn)
     except:
-        df_bowlers = pd.DataFrame()
-
-    try:
-        df_mom = pd.read_sql_query(f"SELECT player_of_match, COUNT(*) as awards FROM match_summary {where_clause} {'AND' if where_clause else 'WHERE'} player_of_match IS NOT NULL GROUP BY player_of_match ORDER BY awards DESC LIMIT 5", conn)
-    except:
-        df_mom = pd.DataFrame()
-
+        pass
+        
     conn.close()
-    return total_matches, df_batters, df_bowlers, df_mom
+    return df_matches, df_batters, df_bowlers
+
+def get_points_table(df_matches):
+    if df_matches.empty:
+        return pd.DataFrame()
+    teams = pd.concat([df_matches['team1'], df_matches['team2']]).dropna().unique()
+    pt_dict = {team: {'M': 0, 'W': 0, 'L': 0, 'NR/Tie': 0, 'Pts': 0} for team in teams}
+    for _, row in df_matches.iterrows():
+        t1, t2, w = row['team1'], row['team2'], row['winner']
+        if pd.isna(t1) or pd.isna(t2): continue
+        pt_dict[t1]['M'] += 1
+        pt_dict[t2]['M'] += 1
+        if pd.isna(w) or w not in [t1, t2]:
+            pt_dict[t1]['NR/Tie'] += 1; pt_dict[t2]['NR/Tie'] += 1
+            pt_dict[t1]['Pts'] += 1; pt_dict[t2]['Pts'] += 1
+        else:
+            loser = t2 if w == t1 else t1
+            pt_dict[w]['W'] += 1; pt_dict[w]['Pts'] += 2
+            if loser in pt_dict: pt_dict[loser]['L'] += 1
+    pt_df = pd.DataFrame.from_dict(pt_dict, orient='index').reset_index().rename(columns={'index': 'Team'})
+    return pt_df.sort_values(by=['Pts', 'W'], ascending=[False, False]).reset_index(drop=True)
 
 df_live = load_live_data()
 
@@ -101,10 +70,8 @@ search_team = st.sidebar.text_input("Search for a Team:")
 
 filtered_df = df_live.copy()
 if not filtered_df.empty:
-    if selected_format != "All Formats":
-        filtered_df = filtered_df[filtered_df['format_type'] == selected_format]
-    if search_team:
-        filtered_df = filtered_df[filtered_df['team1'].str.contains(search_team, case=False, na=False) | filtered_df['team2'].str.contains(search_team, case=False, na=False)]
+    if selected_format != "All Formats": filtered_df = filtered_df[filtered_df['format_type'] == selected_format]
+    if search_team: filtered_df = filtered_df[filtered_df['team1'].str.contains(search_team, case=False, na=False) | filtered_df['team2'].str.contains(search_team, case=False, na=False)]
 
 tab1, tab2 = st.tabs(["🔴 Live & Upcoming", "🏏 IPL Season Explorer"])
 
@@ -127,25 +94,37 @@ with tab2:
     selected_year = st.selectbox("Select IPL Season:", years)
     st.markdown("---")
 
-    total_matches, df_batters, df_bowlers, df_mom = load_season_dashboard(selected_year)
-
+    df_matches, df_batters, df_bowlers = load_season_data(selected_year)
+    
+    total_matches = len(df_matches)
+    
     c1, c2, c3, c4 = st.columns(4)
-    c1.metric("🏏 Matches", total_matches)
+    c1.metric("🏏 Matches Played", total_matches)
     if not df_batters.empty: c2.metric("🟠 Orange Cap", df_batters.iloc[0]['batter'], f"{df_batters.iloc[0]['runs']} Runs", delta_color="normal")
     if not df_bowlers.empty: c3.metric("🟣 Purple Cap", df_bowlers.iloc[0]['bowler'], f"{df_bowlers.iloc[0]['wickets']} Wickets", delta_color="normal")
-    if not df_mom.empty: c4.metric("⭐ Most MVP", df_mom.iloc[0]['player_of_match'], f"{df_mom.iloc[0]['awards']} Awards", delta_color="normal")
+    if not df_matches.empty and 'player_of_match' in df_matches.columns: 
+        top_mom = df_matches['player_of_match'].value_counts()
+        if not top_mom.empty: c4.metric("⭐ Most MVP", top_mom.index[0], f"{top_mom.iloc[0]} Awards", delta_color="normal")
+
+    st.markdown("---")
+    
+    st.subheader(f"🏟️ Every Single Match Stats ({selected_year})")
+    if not df_matches.empty:
+        st.dataframe(df_matches, use_container_width=True, hide_index=True)
+    else:
+        st.error("⚠️ Match Summary Data is missing! If this works locally but not online, your database file failed to sync to GitHub.")
 
     st.markdown("---")
 
     col_pt, col_charts = st.columns([1.5, 1])
-
     with col_pt:
         st.subheader(f"📊 {selected_year} Points Table")
-        pt_df = get_points_table(selected_year)
+        pt_df = get_points_table(df_matches)
         if not pt_df.empty:
+            pt_df.index += 1
             st.dataframe(pt_df, use_container_width=True)
         else:
-            st.info("Points Table data not available for this selection.")
+            st.info("Points Table data not available.")
 
     with col_charts:
         st.subheader("Top Run Scorers")
