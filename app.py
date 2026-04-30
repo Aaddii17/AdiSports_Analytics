@@ -19,13 +19,14 @@ def load_live_data():
 def load_season_data(selected_year):
     conn = sqlite3.connect('sports_analytics.db')
     
-    # THE FIX: We use exact dates instead of the messy season column!
+    # THE FIX: Ultimate Date Catcher (Catches 2023, -23, /23, and season text)
     if selected_year == "All-Time":
         where_match = ""
         where_ball = ""
     else:
-        where_match = f"WHERE match_date LIKE '%{selected_year}%'"
-        where_ball = f"WHERE date LIKE '%{selected_year}%'"
+        short_y = selected_year[-2:] # Grabs '23' from '2023'
+        where_match = f"WHERE match_date LIKE '%{selected_year}%' OR match_date LIKE '%-{short_y}' OR match_date LIKE '%/{short_y}' OR CAST(season AS TEXT) LIKE '%{selected_year}%'"
+        where_ball = f"WHERE date LIKE '%{selected_year}%' OR date LIKE '%-{short_y}' OR date LIKE '%/{short_y}' OR CAST(season AS TEXT) LIKE '%{selected_year}%'"
     
     df_matches = pd.DataFrame()
     try:
@@ -119,7 +120,7 @@ with tab2:
     if not df_matches.empty:
         st.dataframe(df_matches, use_container_width=True, hide_index=True)
     else:
-        st.error("⚠️ Match Summary Data is missing for this specific year.")
+        st.error("⚠️ Match Summary Data is missing for this specific year. (The dataset provider may have skipped it!)")
 
     st.markdown("---")
 
