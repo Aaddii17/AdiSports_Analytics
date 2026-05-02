@@ -12,7 +12,10 @@ def load_live_data():
         df = pd.read_sql_query("SELECT match_date, team1, team2, format_type, series_name, match_desc FROM upcoming_matches", conn)
         def get_category(series):
             s = str(series).lower()
-            if any(word in s for word in ['league', 'psl', 'ipl', 'blast', 'smash', 'hundred', 'challenger', 'super']):
+            # 👑 THE FIX: Give IPL its own supreme category!
+            if 'ipl' in s or 'indian premier league' in s:
+                return '🌟 IPL (Indian Premier League)'
+            elif any(word in s for word in ['league', 'psl', 'blast', 'smash', 'hundred', 'challenger', 'super', 'wpl']):
                 return 'Domestic / Franchise'
             return 'International'
         df['category'] = df['series_name'].apply(get_category)
