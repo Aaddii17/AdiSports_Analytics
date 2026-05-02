@@ -10,6 +10,12 @@ def load_live_data():
     conn = sqlite3.connect('sports_analytics.db')
     try:
         df = pd.read_sql_query("SELECT match_date, team1, team2, format_type, series_name, match_desc FROM upcoming_matches", conn)
+        def get_category(series):
+            s = str(series).lower()
+            if any(word in s for word in ['league', 'psl', 'ipl', 'blast', 'smash', 'hundred', 'challenger', 'super']):
+                return 'Domestic / Franchise'
+            return 'International'
+        df['category'] = df['series_name'].apply(get_category)
     except:
         df = pd.DataFrame()
     conn.close()
@@ -18,8 +24,6 @@ def load_live_data():
 @st.cache_data
 def load_season_data(selected_year):
     conn = sqlite3.connect('sports_analytics.db')
-    
-    # THE FIX: Safely looking for the explicit 4-digit year in either the Date or Season columns!
     if selected_year == "All-Time":
         where_match = ""
         where_ball = ""
@@ -30,34 +34,29 @@ def load_season_data(selected_year):
     df_matches = pd.DataFrame()
     try:
         df_matches = pd.read_sql_query(f"SELECT match_date, team1, team2, winner, player_of_match, venue, toss_winner, toss_decision FROM match_summary {where_match} ORDER BY match_date ASC", conn)
-    except:
-        pass
+    except: pass
         
     df_batters = pd.DataFrame()
     try:
         df_batters = pd.read_sql_query(f"SELECT batter, SUM(runs_batter) as runs FROM ipl_history {where_ball} GROUP BY batter ORDER BY runs DESC LIMIT 5", conn)
-    except:
-        pass
+    except: pass
 
     df_bowlers = pd.DataFrame()
     try:
         df_bowlers = pd.read_sql_query(f"SELECT bowler, COUNT(player_out) as wickets FROM ipl_history {where_ball} {'AND' if where_ball else 'WHERE'} player_out IS NOT NULL GROUP BY bowler ORDER BY wickets DESC LIMIT 5", conn)
-    except:
-        pass
+    except: pass
         
     conn.close()
     return df_matches, df_batters, df_bowlers
 
 def get_points_table(df_matches):
-    if df_matches.empty:
-        return pd.DataFrame()
+    if df_matches.empty: return pd.DataFrame()
     teams = pd.concat([df_matches['team1'], df_matches['team2']]).dropna().unique()
     pt_dict = {team: {'M': 0, 'W': 0, 'L': 0, 'NR/Tie': 0, 'Pts': 0} for team in teams}
     for _, row in df_matches.iterrows():
         t1, t2, w = row['team1'], row['team2'], row['winner']
         if pd.isna(t1) or pd.isna(t2): continue
-        pt_dict[t1]['M'] += 1
-        pt_dict[t2]['M'] += 1
+        pt_dict[t1]['M'] += 1; pt_dict[t2]['M'] += 1
         if pd.isna(w) or w not in [t1, t2]:
             pt_dict[t1]['NR/Tie'] += 1; pt_dict[t2]['NR/Tie'] += 1
             pt_dict[t1]['Pts'] += 1; pt_dict[t2]['Pts'] += 1
@@ -70,15 +69,23 @@ def get_points_table(df_matches):
 
 df_live = load_live_data()
 
-st.sidebar.header("🔍 Filter Live Matches")
-formats = ["All Formats"] + df_live['format_type'].unique().tolist() if not df_live.empty else ["All Formats"]
-selected_format = st.sidebar.selectbox("Select Format", formats)
-search_team = st.sidebar.text_input("Search for a Team:")
-
+st.sidebar.header("🔍 Advanced Match Finder")
 filtered_df = df_live.copy()
+
 if not filtered_df.empty:
-    if selected_format != "All Formats": filtered_df = filtered_df[filtered_df['format_type'] == selected_format]
-    if search_team: filtered_df = filtered_df[filtered_df['team1'].str.contains(search_team, case=False, na=False) | filtered_df['team2'].str.contains(search_team, case=False, na=False)]
+    cat_options = ["All"] + filtered_df['category'].unique().tolist()
+    selected_cat = st.sidebar.radio("1. Match Tier", cat_options)
+    if selected_cat != "All":
+        filtered_df = filtered_df[filtered_df['category'] == selected_cat]
+        
+    tournaments = ["All Tournaments"] + filtered_df['series_name'].unique().tolist()
+    selected_tourney = st.sidebar.selectbox("2. Select Tournament", tournaments)
+    if selected_tourney != "All Tournaments":
+        filtered_df = filtered_df[filtered_df['series_name'] == selected_tourney]
+        
+    search_team = st.sidebar.text_input("3. Search Specific Team:")
+    if search_team:
+        filtered_df = filtered_df[filtered_df['team1'].str.contains(search_team, case=False, na=False) | filtered_df['team2'].str.contains(search_team, case=False, na=False)]
 
 tab1, tab2 = st.tabs(["🔴 Live & Upcoming", "🏏 IPL Season Explorer"])
 
@@ -94,7 +101,7 @@ with tab1:
                     st.markdown(f"⚔️ **{row['team2']}**")
                     st.caption(f"🕒 {row['match_date']}")
     else:
-        st.warning("No live matches found.")
+        st.warning("No matches found matching your filters.")
 
 with tab2:
     years = ["All-Time"] + [str(y) for y in range(2025, 2007, -1)]
@@ -102,7 +109,6 @@ with tab2:
     st.markdown("---")
 
     df_matches, df_batters, df_bowlers = load_season_data(selected_year)
-    
     total_matches = len(df_matches)
     
     c1, c2, c3, c4 = st.columns(4)
